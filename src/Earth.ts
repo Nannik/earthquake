@@ -4,6 +4,8 @@ import * as gfx from 'gophergfx'
 import { EarthquakeMarker } from './EarthquakeMarker';
 import { EarthquakeRecord } from './EarthquakeRecord';
 
+const MORPH_ANIMATION_TIME_MS = 1000
+
 export class Earth extends gfx.Node3
 {
     private earthMesh: gfx.MorphMesh3;
@@ -54,8 +56,10 @@ export class Earth extends gfx.Node3
 	// В этой процедуре предположим, что оба значения одинаковы:
     //   n = разрешение сетки
     //   m = разрешение сетки
-    public createMesh(meshResolution: number): void
+	// @param mr - mesh resolution
+    public createMesh(mr: number): void
     {
+		// Parts 1, 3
         // Часть 1: Создание сетки плоской карты
         // В рамках вашего кода, пожалуйста, завершите метод convertLatLongToPlane(),
 		// который появится позже в этом классе, и используйте его здесь, чтобы помочь вам вычислить
@@ -64,10 +68,39 @@ export class Earth extends gfx.Node3
         const mapNormals: gfx.Vector3[] = [];
         const indices: number[] = [];
         const texCoords: number[] = [];
-
-
        
+        const globeVertices: gfx.Vector3[] = [];
+        const globeNormals: gfx.Vector3[] = [];
 
+		for (let vert of mapVertices) {
+		}
+		for (let i = 0; i < mr; i++) {
+			const longitude = i * (360 / (mr - 1)) - 180
+			for (let j = 0; j < mr; j++) {
+				const latitude = j * (180 / (mr - 1)) - 90
+
+				mapVertices.push(this.convertLatLongToPlane(latitude, longitude))
+				mapNormals.push(new gfx.Vector3(0, 0, 1))
+				texCoords.push(i / (mr - 1), 1 - j / (mr - 1))
+
+				const globeVert = this.convertLatLongToSphere(latitude, longitude)
+				globeVertices.push(globeVert)
+				globeNormals.push(gfx.Vector3.normalize(globeVert))
+			}
+		}
+
+		for (let i = 0; i < mr - 1; i++) {
+			for (let j = 0; j < mr - 1; j++) {
+				const tl = i * mr + j;
+				const tr = tl + 1;
+				const bl = tl + mr;
+				const br = bl + 1;
+				console.log(tl, tr, bl, br)
+
+				indices.push(tl, bl, tr);
+				indices.push(tr, bl, br);
+			}
+		}
 
 
         // Это сохраняет массивы данных в сетке Земли.
@@ -75,24 +108,6 @@ export class Earth extends gfx.Node3
         this.earthMesh.setNormals(mapNormals, true);
         this.earthMesh.setIndices(indices);
         this.earthMesh.setTextureCoordinates(texCoords);
-
-
-        // Часть 3: Создание сетки глобуса
-		// В рамках вашего кода, пожалуйста, завершите метод convertLatLongToSphere(),
-		// который появится позже в этом классе, и используйте его здесь, чтобы помочь вам вычислить
-		// позиции вершин для сетки плоской карты. 
-
-        // Если вы заполните эти массивы для хранения данных сетки глобуса, вы можете использовать
-		// код ниже, чтобы сохранить их в сетке глобуса. Обратите внимание, индексы и
-		// координаты текстуры будут одинаковыми для обеих сеток. Поэтому нам не
-		// нужно их пересчитывать.
-        const globeVertices: gfx.Vector3[] = [];
-        const globeNormals: gfx.Vector3[] = [];
-
-
-
-
-
 
         // Это сохраняет массивы данных в сетке Земли.
         this.earthMesh.setMorphTargetVertices(globeVertices, true);
@@ -114,12 +129,14 @@ export class Earth extends gfx.Node3
 		// глобуса. Однако, чтобы получить плавный морфинг, вам нужно будет постепенно корректировать значение
 		// в зависимости от прошедшего времени.
 
+		const animDelta = (deltaTime * 1000) / MORPH_ANIMATION_TIME_MS
         if (this.globeMode) {
             // режим глобуса активен
+			this.earthMesh.morphAlpha = Math.min(1, this.earthMesh.morphAlpha + animDelta)
         } 
         else {
             // режим плоской карты активен
-
+			this.earthMesh.morphAlpha = Math.max(0, this.earthMesh.morphAlpha - animDelta)
         }
 
     }
@@ -132,7 +149,22 @@ export class Earth extends gfx.Node3
 		// нужно будет задать положения землетрясения на карте и глобусе и задать его цвет на основе
 		// магнитуды землетрясения.
         const duration = 12 * 30 * 24 * 60 * 60;  // приблизительное количество миллисекунд в 1 году
-        const earthquake = new EarthquakeMarker(gfx.Vector3.ZERO, gfx.Vector3.ZERO, record, duration);
+        const earthquake = new EarthquakeMarker(
+			this.convertLatLongToPlane(record.latitude, record.longitude), 
+			this.convertLatLongToSphere(record.latitude, record.longitude), 
+			record, 
+			duration
+		);
+
+		earthquake.material.setColor(new gfx.Color(
+			1,
+			gfx.MathUtils.lerp(0, 1, record.normalizedMagnitude),
+			0,
+		))
+
+		const x = gfx.MathUtils.lerp(0.3, 0.8, record.normalizedMagnitude)
+		earthquake.scale = new gfx.Vector3(x, x, x)
+
         this.add(earthquake);
     }
 
@@ -150,10 +182,11 @@ export class Earth extends gfx.Node3
                 }
                 else {
                     // Часть 6: Изменение позиций землетрясений
-
-
-
-
+					quake.position.set(
+						gfx.MathUtils.lerp(quake.mapPosition.x, quake.globePosition.x, this.earthMesh.morphAlpha),
+						gfx.MathUtils.lerp(quake.mapPosition.y, quake.globePosition.y, this.earthMesh.morphAlpha),
+						gfx.MathUtils.lerp(quake.mapPosition.z, quake.globePosition.z, this.earthMesh.morphAlpha),
+					)
                 }
             }
         });
@@ -164,9 +197,8 @@ export class Earth extends gfx.Node3
 	// в системе координат плоской карты.
     public convertLatLongToPlane(latitude: number, longitude: number): gfx.Vector3
     {
-
-
-        return gfx.Vector3.ZERO;
+		const factor = Math.PI / 180
+        return new gfx.Vector3(longitude * factor, latitude * factor);
     }
 
 
@@ -174,9 +206,14 @@ export class Earth extends gfx.Node3
 	// в системе координат земного шара.
     public convertLatLongToSphere(latitude: number, longitude: number): gfx.Vector3
     {
+		const rLat = latitude * (Math.PI / 180)
+		const rLon = longitude * (Math.PI / 180)
 
-
-        return gfx.Vector3.ZERO;
+        return new gfx.Vector3(
+			Math.cos(rLat) * Math.sin(rLon),
+			Math.sin(rLat),
+			Math.cos(rLat) * Math.cos(rLon)
+		)
     }
 
 
